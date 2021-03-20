@@ -1,0 +1,279 @@
+---
+title: "Human Chimp Orgnaoid integration after subsetting"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r}
+library(Matrix)
+library(Seurat)
+library(monocle3)
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(patchwork)
+library(SeuratData)
+library(SeuratWrappers)
+```
+
+Read human organoid data
+```{r}
+# Read in `matrix.mtx`
+counts <- readMM("C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/human_cell_consensus/human_cell_counts_consensus.mtx")
+
+# Read in `genes_consensus.tsv`, change to X1 if you want to use Ensembl ID
+gene_ids <- read_tsv("C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/human_cell_consensus/genes_consensus.tsv", col_names = FALSE)$X2
+
+# Read in `metadata_human_cells.tsv`
+cell_level_metadata = read_tsv("C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/human_cell_consensus/metadata_human_cells_Remove Cell Names.tsv", col_names = TRUE )
+cell_level_metadata = as.data.frame(cell_level_metadata)
+
+cell_ids = read_tsv("C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/human_cell_consensus/metadata_human_cells_Remove Header.tsv", col_names = FALSE)$X1
+
+rownames(cell_level_metadata) = cell_ids
+```
+
+Then we can add row names to the count matrix to be the gene IDs and the column names of the count matrix to be the cell IDs.
+```{r}
+# Make the column names as the cell IDs and the row names as the gene IDs
+rownames(counts) <- gene_ids
+colnames(counts) <- cell_ids
+
+# Initialize the Seurat object with the raw (non-normalized data).
+HuOrg_consen = CreateSeuratObject(counts = counts, project = "Human Organoid_consensus", min.cells = 3, min.features = 200, meta.data = cell_level_metadata)
+HuOrg_consen
+
+# Subset the Seurat object, only keep H9 cells
+Idents(HuOrg_consen) <- "Line"
+HuOrg_consen_H9 = subset(HuOrg_consen, idents = "H9")
+HuOrg_consen_H9
+
+# Optional_save the H9 only Seurat object(raw data without any QC)
+saveRDS(HuOrg_consen_H9, file = "C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/human_chimp_subset/HuOrg_consen_H9_Before_QC.rds")
+```
+
+
+Read Chimp organoid data
+```{r}
+# Read in `matrix.mtx`
+counts <- readMM("C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/chimp_cell/chimp_cell_counts_consensus.mtx")
+
+# Read in `genes.tsv`, change to X1 if you want to use Ensembl ID
+gene_ids <- read_tsv("C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/chimp_cell/genes_consensus.tsv", col_names = FALSE)$X2
+
+# Read in `metadata_chimp_cells.tsv`
+cell_level_metadata = read_tsv("C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/chimp_cell/metadata_chimp_cells_Remove Cell Names.tsv", col_names = TRUE )
+cell_level_metadata = as.data.frame(cell_level_metadata)
+
+cell_ids = read_tsv("C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/chimp_cell/metadata_chimp_cells_Remove Header.tsv", col_names = FALSE)$X1
+
+rownames(cell_level_metadata) = cell_ids
+```
+
+Then we can add row names to the count matrix to be the gene IDs and the column names of the count matrix to be the cell IDs.
+```{r}
+# Make the column names as the cell IDs and the row names as the gene IDs
+rownames(counts) <- gene_ids
+colnames(counts) <- cell_ids
+
+# Initialize the Seurat object with the raw (non-normalized data).
+ApeOrg = CreateSeuratObject(counts = counts, project = "Ape Organoid", min.cells = 3, min.features = 200, meta.data = cell_level_metadata)
+ApeOrg
+
+# Subset the Seurat object, only keep SandraA cells
+Idents(ApeOrg) <- "Line"
+ChimpOrg_SandraA = subset(ApeOrg, idents = "SandraA")
+ChimpOrg_SandraA
+
+# Optional_save the SandraA only Seurat object(raw data without any QC)
+saveRDS(ChimpOrg_SandraA, file = "C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/human_chimp_subset/ChimpOrg_SandraA_Before_QC.rds")
+```
+
+Combine Human and Chimp Seurat Objects
+```{r}
+Hu_Chimp <- merge(HuOrg_consen_H9, y = ChimpOrg_SandraA, add.cell.ids = c("Human", "Chimp"), project = "Human Chimp Orgnaoid")
+Hu_Chimp
+```
+
+QC and selecting cells for further analysis
+```{r}
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+Hu_Chimp[["percent.mt"]] <- PercentageFeatureSet(Hu_Chimp, pattern = "^MT-")
+
+# Visualize QC metrics as a violin plot
+VlnPlot(Hu_Chimp, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+plot1 <- FeatureScatter(Hu_Chimp, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(Hu_Chimp, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+
+Hu_Chimp <- subset(Hu_Chimp, subset = nFeature_RNA > 750 & nFeature_RNA < 6000 & percent.mt < 5)
+Hu_Chimp
+
+# Optional_save the merged Seurat object (After QC for mito genes, cell doublets and potential debris)
+saveRDS(Hu_Chimp, file = "C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/human_chimp_subset/Hu_Chimp_Subset_After_QC.rds")
+
+# Hu_Chimp = readRDS("/data1/stemrem205/sicowang/Hu_Chimp_Subset_After_QC.rds")
+
+```
+
+```{r}
+# split the dataset into a list of two seurat objects (Human and Chimp)
+Hu_Chimp.list <- SplitObject(Hu_Chimp, split.by = "Species")
+
+# normalize and identify variable features for each dataset independently
+Hu_Chimp.list <- lapply(X = Hu_Chimp.list, FUN = function(x) {
+    x <- NormalizeData(x)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+# select features that are repeatedly variable across datasets for integration
+features <- SelectIntegrationFeatures(object.list = Hu_Chimp.list)
+
+# Identify the 20 most highly variable genes
+top20 <- head(features, 20)
+
+# Uniqe workflow for using RPCA workflow
+HuApe.list <- lapply(X = HuApe.list, FUN = function(x) {
+    x <- ScaleData(x, features = features, verbose = FALSE)
+    x <- RunPCA(x, features = features, verbose = FALSE)
+})
+```
+
+Perform integration  (My laptop couldn't run through this, need more RAM, cannot allocate vector of size 38.6GB)
+
+```{r}
+Hu_Chimp.anchors <- FindIntegrationAnchors(object.list = Hu_Chimp.list, anchor.features = features)
+
+# Uniqe workflow for using RPCA workflow
+HuApe.anchors <- FindIntegrationAnchors(object.list = HuApe.list, anchor.features = features, reduction = "rpca")
+
+# this command creates an 'integrated' data assay
+Hu_Chimp.Integrated <- IntegrateData(anchorset = Hu_Chimp.anchors)
+```
+
+STOP Here!!! Let's try if we can run downstream analyis without using server. 
+******************************************************************************************************************************************************
+1.Perform an integrated analysis
+```{r}
+# specify that we will perform downstream analysis on the corrected data note that the original unmodified data still resides in the 'RNA' assay
+DefaultAssay(Hu_Chimp.Integrated) <- "integrated"
+DefaultAssay(Hu_Chimp.Integrated) <- "RNA"
+
+
+# Optional_Save the integrated Seurat object before doing any downstream analysis
+saveRDS(Hu_Chimp.Integrated, file = "/data1/stemrem205/sicowang/Hu_Chimp_Integrated_Before_Scaling.rds")
+```
+
+2. Scaling the data (This step takes 40min to complete on my laptop)
+```{r}
+#all.genes <- rownames(HuOrg_consen)
+#HuOrg_consen <- ScaleData(HuOrg_consen, features = all.genes)
+
+# Make it faster!!!!!!!!!!
+Hu_Chimp.Integrated <- ScaleData(Hu_Chimp.Integrated)
+```
+
+Perform linear dimensional reduction
+```{r}
+Hu_Chimp.Integrated <- RunPCA(Hu_Chimp.Integrated, features = VariableFeatures(object = Hu_Chimp.Integrated))
+
+#VizDimLoadings(HuApe, dims = 1:5, reduction = "pca")
+DimPlot(Hu_Chimp.Integrated, reduction = "pca")
+DimHeatmap(Hu_Chimp.Integrated, dims = 1, cells = 500, balanced = TRUE)
+```
+
+Determine the 'dimensionality' of the dataset
+```{r}
+ElbowPlot(Hu_Chimp.Integrated, ndims = 50)
+```
+
+Cluster the cells
+```{r}
+Hu_Chimp.Integrated <- FindNeighbors(Hu_Chimp.Integrated, dims = 1:40)
+Hu_Chimp.Integrated <- FindClusters(Hu_Chimp.Integrated, resolution = 0.5)
+# Look at cluster IDs of the first 10 cells
+head(Idents(Hu_Chimp.Integrated), 10)
+tail(Idents(Hu_Chimp.Integrated), 10)
+```
+
+Run non-linear dimensional reduction (UMAP/tSNE)
+```{r}
+# If you haven't installed UMAP, you can do so via reticulate::py_install(packages = 'umap-learn')
+Hu_Chimp.Integrated <- RunUMAP(Hu_Chimp.Integrated, dims = 1:40)
+
+# note that you can set `label = TRUE` or use the LabelClusters function to help label individual clusters
+DimPlot(Hu_Chimp.Integrated, reduction = "umap", label= TRUE)
+
+# Overlap stage on UMAP
+DimPlot(Hu_Chimp.Integrated, reduction = "umap", group.by  = "Species") 
+DimPlot(Hu_Chimp.Integrated, reduction = "umap", group.by  = "Stage", label = TRUE) 
+#DimPlot(HuApe, reduction = "umap", group.by  = "Sample") 
+DimPlot(Hu_Chimp.Integrated, reduction = "umap", group.by  = "Line") 
+DimPlot(Hu_Chimp.Integrated, reduction = "umap", group.by  = "PredCellType",label= TRUE) 
+```
+
+You can save the object at this point so that it can easily be loaded back in without having to rerun the computationally intensive steps performed above, or easily shared with collaborators. (This step takes 30min to run on my laptop)
+```{r}
+saveRDS(Hu_Chimp.Integrated, file = "/data1/stemrem205/sicowang/Hu_Chimp_Integrated_After_UMAP.rds")
+
+Hu_Chimp.Integrated = readRDS("C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/human_chimp_subset/Hu_Chimp_Integrated_After_UMAP.rds")
+```
+
+Plotting
+```{r}
+FeaturePlot(Hu_Chimp.Integrated, features = c("POU5F1", "FOXG1", "EOMES", "NEUROD6", "DLX5", "LHX9"))
+
+FeaturePlot(Hu_Chimp.Integrated, features = c("ZEB2", "CDH1", "SMAD3", "TWIST1", "ZEB1", "SMAD2"))
+
+FeaturePlot(Hu_Chimp.Integrated, features = c("ZEB2", "CDH2", "SOX2", "PAX6", "PTEN", "TP53"))
+
+VlnPlot(Hu_Chimp.Integrated, features = c("ZEB2"), split.by = 'Species', pt.size = 0)
+
+VlnPlot(Hu_Chimp.Integrated, features = c("ZEB2"), group.by = 'Stage' ,split.by = 'Species', pt.size = 0)
+
+```
+
+Finding differentially expressed features (cluster biomarkers)
+```{r}
+# find markers for every cluster compared to all remaining cells, report only the positive ones
+Hu_Chimp.Integrated.markers <- FindAllMarkers(Hu_Chimp.Integrated, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+Hu_Chimp.Integrated.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+#write.csv(Hu_Chimp.Integrated.markers, 'C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/chimp output/ApeOrg_markers.csv')
+```
+
+Try to do DGE anaysis within one cluster, compare human vs chimp
+```{r}
+# Change assay to RNA, necessary step
+DefaultAssay(Hu_Chimp.Integrated) <- "RNA"
+
+# Subset the Seurat object based on a cluster of interest (for example cluster 14 )
+Idents(Hu_Chimp.Integrated) <- "seurat_clusters"
+Hu_Chimp_cluster14 = subset(Hu_Chimp.Integrated, idents = "14")
+
+# We are intered in species difference in cluster 14, so set identity to species
+Idents(Hu_Chimp_cluster14) <- "Species"
+Cluster14_Species_Markers <- FindMarkers(Hu_Chimp_cluster14, ident.1 = 'human', ident.2 = 'chimp', min.pct = 0.25)
+head(Cluster14_Species_Markers)
+
+# Check some genes that you see from the head() function
+VlnPlot(Hu_Chimp_cluster14, features = c("AMY2B"), pt.size = 0)
+VlnPlot(Hu_Chimp_cluster14, features = c("RPS26"), pt.size = 0)
+
+# Save a csv and download from the server
+write.csv(Cluster14_Species_Markers, 'C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/chimp output/xxxxxxxx.csv')
+```
+
+Heatmap
+```{r}
+top10 <- ApeOrg.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+
+pdf("HeatMap_AllCells_Top10.pdf", width=15, height=20)
+DoHeatmap(ApeOrg, features = top10$gene) + NoLegend()
+dev.off()
+
+```
+
+

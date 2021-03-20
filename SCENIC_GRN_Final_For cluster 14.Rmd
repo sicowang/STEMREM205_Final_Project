@@ -1,0 +1,213 @@
+---
+title: "SCENIC_GRN"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Load all packages
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+# Suppress loading messages when building the HTML
+suppressPackageStartupMessages({
+  library(SCENIC)
+  library(AUCell)
+  library(RcisTarget)
+  library(SCopeLoomR)
+  library(KernSmooth)
+  library(BiocParallel)
+  library(ggplot2)
+  library(data.table)
+  library(grid)
+  library(ComplexHeatmap)
+  library(Seurat)
+
+})
+
+options(width=200)
+```
+
+Load the Human_chimp integrated Seurat object
+```{r}
+Hu_Chimp.Integrated = readRDS("C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/human_chimp_subset/Hu_Chimp_Integrated_After_UMAP.rds")
+
+# Change assay to RNA, necessary step
+DefaultAssay(Hu_Chimp.Integrated) <- "RNA"
+```
+
+Subset the Seurat object 
+```{r}
+# Subset the seurat object based on cluster of interest. I am using the iPSC cluster (cluster 6 as an example here)
+
+# Check some iPSC marker genes, figure out which cluter reprents iPSC
+VlnPlot(Hu_Chimp.Integrated, features = c("POU5F1", "NANOG", "SOX2", "PODXL", "CDH1", "KRT18"), pt.size = 0)
+
+# Check UMAP, cluster 6 is the iPSC cluster
+Idents(Hu_Chimp.Integrated) <- "seurat_clusters"
+Hu_Chimp_cluster14 = subset(Hu_Chimp.Integrated, idents = "14")
+
+# Split cluster6 by species
+Idents(Hu_Chimp_cluster14) <- "Species"
+Cluster14_Human = subset(Hu_Chimp_cluster14, idents = "human")
+Cluster14_Chimp = subset(Hu_Chimp_cluster14, idents = "chimp")
+
+# save the human cluster 6 Seurat object as an rds file
+saveRDS(Cluster6_Human, file = "C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/SCENIC_GRN/Cluster6_Human.rds")
+
+# save on server
+saveRDS(Cluster14_Human, file = "/data1/stemrem205/sicowang/scenic/Cluster14/Cluster14_Human.rds")
+saveRDS(Cluster14_Chimp, file = "/data1/stemrem205/sicowang/scenic/Cluster14/Cluster14_Chimp.rds")
+
+
+# the code in line 57 is for reading it on the server, I keep it for copying and pasting.
+Cluster10_Chimp = readRDS('/data1/stemrem205/sicowang/scenic/Cluster10/Cluster10_Chimp.rds')
+
+# Retrieve data in an expression matrix ('counts' stores raw UMI counts, 'data' stores normlized data, and 'scale.data' stores scaled data)
+exprMat_Human = GetAssayData(object = Cluster14_Human, slot = "counts")
+exprMat_Chimp = GetAssayData(object = Cluster14_Chimp, slot = "counts")
+
+# Convert dgMatrix to a normal matrix
+exprMat_Human = as.matrix(exprMat_Human)
+exprMat_Chimp = as.matrix(exprMat_Chimp)
+
+saveRDS(exprMat_Chimp, file = "/data1/stemrem205/sicowang/scenic/Cluster14/exprMat_Chimp.rds")
+saveRDS(exprMat_Human, file = "/data1/stemrem205/sicowang/scenic/Cluster10/exprMat_Human.rds")
+
+```
+
+Initialize SCENIC settings
+```{r}
+org <- "hgnc" # or hgnc, or dmel, or mgi
+#dbDir <- "cisTarget_databases" # RcisTarget databases location
+dbDir <- "/data1/stemrem205/sicowang/scenic/cisTarget_databases" # RcisTarget databases location
+
+myDatasetTitle <- "SCENIC example on cluster14_Chimp" # choose a name for your analysis
+data(defaultDbNames)
+dbs <- defaultDbNames[[org]]
+#dbs["500bp"] = "hg19-500bp-upstream-7species.mc8nr.feather"
+#dbs["10kb"]= "hg19-tss-centered-10kb-7species.mc8nr.feather"
+
+# Save and then Transfer dbs_human.rds to the server
+saveRDS(dbs, file = "C:/Users/sicon/Desktop/Stanford PhD/1 Courses/2021 Winter/STEMREM 205/STEMREM 205 project/Processed data/SCENIC_GRN/dbs_human.rds")
+# Read this dbs.rds on the server
+dbs = readRDS("/data1/stemrem205/sicowang/scenic/dbs_human.rds")
+
+scenicOptions_cluster14_chimp <- initializeScenic(org=org, dbDir=dbDir, dbs=dbs, datasetTitle=myDatasetTitle) 
+```
+
+# Co-expression network
+## Gene filter/selection
+```{r}
+# (Adjust minimum values according to your dataset)
+genesKept <- geneFiltering(exprMat_Chimp, scenicOptions=scenicOptions_cluster14_chimp,
+                           minCountsPerGene=3*.01*ncol(exprMat_Chimp),
+                           minSamples=ncol(exprMat_Chimp)*.01)
+```
+
+Before proceeding to the network inference, check whether any known relevant genes are filtered-out (if any relevant gene is missing, double-check whether the filters are appropiate): 
+```{r checkMissingGenes}
+interestingGenes <- c("ZEB2", "SOX2", "PAX6")
+# any missing?
+interestingGenes[which(!interestingGenes %in% genesKept)]
+```
+
+We can now **filter the expression matrix** to contain only these `r length(genesKept)` genes. 
+This matrix is now ready for the co-expression analysis.
+```{r saveFilteredExprMat}
+exprMat_filtered <- exprMat_Chimp[genesKept, ]
+dim(exprMat_filtered)
+```
+
+## Correlation
+Calculate the correlation: 
+```{r correlationMat, eval=FALSE}
+runCorrelation(exprMat_filtered, scenicOptions_cluster14_chimp)
+```
+
+## GENIE3 
+```{r}
+# Optional: add log (if it is not logged/normalized already)
+exprMat_filtered <- log2(exprMat_filtered+1) 
+saveRDS(exprMat_filtered, file = "/data1/stemrem205/sicowang/scenic/Cluster14/exprMat_filtered.rds")
+
+
+# Run GENIE3
+runGenie3(exprMat_filtered, scenicOptions_cluster14_chimp)
+
+# After finishing running Genie3, save the scenicOptions as an rds file
+saveRDS(scenicOptions_cluster14_chimp, file="int/scenicOptions_cluster14_chimp.rds") 
+```
+
+# Build and score the GRN (runSCENIC_...)
+```{r}
+# Optional: log expression (for TF expression plot, it does not affect any other calculation). Please note this step uses the unfiltered expression matrix.
+exprMat_Chimp_log <- log2(exprMat_Chimp+1)
+dim(exprMat_Chimp)
+```
+
+```{r}
+# Some basic settings used by the tutorial, no reason why they chose these numbers
+scenicOptions_cluster14_chimp@settings$verbose <- TRUE
+scenicOptions_cluster14_chimp@settings$nCores <- 10
+scenicOptions_cluster14_chimp@settings$seed <- 123
+
+# Do a quick and make sure two human databases are set in the scenicOptions
+scenicOptions_cluster14_chimp@settings$dbs
+
+
+# Downstream step 1 (it takes 3 minutes to complete on the server)
+scenicOptions_cluster14_chimp <- runSCENIC_1_coexNetwork2modules(scenicOptions_cluster14_chimp)
+
+# Downstream step 2 (it takes 6 hours to complete on the server). 
+# You need to load a pacakge called BiocParallel. Otherwise you will get an error (could not find function "register") when you try to run the code below. To load BiocParallel, type library(BiocParallel)
+scenicOptions_cluster14_chimp <- runSCENIC_2_createRegulons(scenicOptions_cluster14_chimp)
+
+# Downstream step 3 (it takes 14 minutes to complete on the server)
+# I got an error when running the code below (Error in .AUCell_calcAUC(geneSets = geneSets, rankings = rankings, nCores = nCores, : Valid 'mctype': 'snow' or 'doMC')
+# Reason: Somehow there is a bug in the AUCell pacakge, the error was related to nCores. You couldn't set ncores to numbers other than 1. After adjusting nCores=1, no errors come out.
+
+# Set ncores to 1
+scenicOptions_cluster14_chimp@settings$nCores <- 1
+
+# SCENIC step 3 (14 min to complete on the server)
+scenicOptions_cluster14_chimp <- runSCENIC_3_scoreCells(scenicOptions_cluster14_chimp, exprMat_Chimp_log)
+
+# Change ncores back to 10 after finishing step 3
+scenicOptions_cluster14_chimp@settings$nCores <- 10
+
+# To save status
+saveRDS(scenicOptions_cluster14_chimp, file="int/scenicOptions_cluster14_chimp.rds") 
+```
+
+
+******************************************************************************************************************************************************
+Data Visualization
+## GRN: Regulon targets and motifs
+**Genes included in the regulons**: 
+
+```{r seeRegulons}
+regulons <- loadInt(scenicOptions_cluster14_chimp, "regulons")
+regulons[c("ZEB2", "PAX6", "SOX2", "DLX5")]
+```
+
+Note than only regulons with 10 genes or more are scored with AUCell (the numbers in brackets in the regulon names indicate the number of genes in the regulon): 
+```{r seeRegulons2}
+regulons <- loadInt(scenicOptions_cluster14_chimp, "aucell_regulons")
+head(cbind(onlyNonDuplicatedExtended(names(regulons))))
+```
+
+Details on the TF-target links: For each TF-target pair, the stats from the intermediate steps are summarized in `loadInt(scenicOptions,"regulonTargetsInfo")` 
+```{r motifEnrichmentDT}
+regulonTargetsInfo <- loadInt(scenicOptions_cluster14_chimp, "regulonTargetsInfo")
+tableSubset <- regulonTargetsInfo[TF=="SOX2" & highConfAnnot==TRUE]
+viewMotifs(tableSubset, options=list(pageLength=5)) 
+```
+
+Alternative tables, showing more or fewer rows/columns could be generated modifiying this code: 
+
+```{r motifEnrichmentDTsubset, eval=FALSE}
+motifEnrichment_selfMotifs_wGenes <- loadInt(scenicOptions_cluster14_chimp, "motifEnrichment_selfMotifs_wGenes")
+tableSubset <- motifEnrichment_selfMotifs_wGenes[highlightedTFs=="SOX2"]
+viewMotifs(tableSubset) 
+```
+
+
